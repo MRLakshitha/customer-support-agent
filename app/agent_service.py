@@ -5,6 +5,7 @@ import re
 
 from app import mock_backend as backend
 from app.agent_state import SessionStore, detect_escalation
+from app.gemini_tools import try_gemini_readonly_tool
 
 logger = logging.getLogger("customer_support.agent")
 
@@ -362,6 +363,12 @@ def _handle_message(session_id, customer_id, message):
         return {"reply": POLICY["refunds"], "intent": "GENERAL_QUESTION"}
     if any(word in lowered for word in ("support hours", "business hours", "opening hours")):
         return {"reply": POLICY["support"], "intent": "GENERAL_QUESTION"}
+
+# Optional Gemini function calling for requests not handled above.
+    # Deterministic cancellation, return, security, and policy rules run first.
+    gemini_result = try_gemini_readonly_tool(text, customer_id)
+    if gemini_result is not None:
+        return gemini_result
 
     return {
         "reply": (

@@ -1,10 +1,17 @@
-﻿
-import json
+﻿import json
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Security,
+)
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -43,14 +50,16 @@ app = FastAPI(
     title="Customer Support AI Agent",
     description=(
         "Customer support API with Gemini, order lookup, "
-        "FAQs, SQLite, and conversation history."
+        "FAQs, SQLite, authentication, and conversation history."
     ),
-    version="2.0.0",
+    version="2.1.0",
 )
+
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 # --------------------------------------------------
-# Request schema
+# Request schemas
 # --------------------------------------------------
 
 class CustomerQuery(BaseModel):
@@ -62,6 +71,97 @@ class AgentChatQuery(BaseModel):
     session_id: str = Field(min_length=1, max_length=100)
     customer_id: str = Field(pattern=r"^CUST-\d{3}$")
     message: str = Field(min_length=1, max_length=2000)
+
+
+# --------------------------------------------------
+# Authentication
+# --------------------------------------------------
+
+def get_authenticated_customer_id(
+    credentials: HTTPAuthorizationCredentials | None = Security(
+        bearer_scheme
+    ),
+) -> str:
+    """
+    Authenticate a customer using a Bearer token.
+
+    CUSTOMER_API_TOKENS must contain a JSON object mapping
+    customer IDs to secret tokens.
+
+    Example:
+    {"CUST001": "a-long-random-secret-token"}
+    """
+    configured_tokens = os.getenv("CUSTOMER_API_TOKENS")
+
+    if not configured_tokens:
+        raise HTTPException(
+            status_code=503,
+            detail="Customer authentication is not configured.",
+        )
+
+    try:
+        token_map = json.loads(configured_tokens)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(
+            status_code=503,
+            detail="Customer authentication configuration is invalid.",
+        )
+
+    if not isinstance(token_map, dict) or not token_map:
+        raise HTTPException(
+            status_code=503,
+            detail="Customer authentication configuration is invalid.",
+        )
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Bearer token required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    supplied_token = credentials.credentials
+
+    if not supplied_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    for customer_id, expected_token in token_map.items():
+        if (
+            isinstance(customer_id, str)
+            and isinstance(expected_token, str)
+            and expected_token
+            and secrets.compare_digest(
+                supplied_token,
+                expected_token,
+            )
+        ):
+            return customer_id
+
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid authentication token.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def require_customer_access(
+    requested_customer_id: str,
+    authenticated_customer_id: str,
+) -> None:
+    """Prevent a customer from accessing another customer's data."""
+    if not secrets.compare_digest(
+        requested_customer_id,
+        authenticated_customer_id,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to access this customer's data.",
+        )
+
 
 # --------------------------------------------------
 # Health check
@@ -93,9 +193,15 @@ def health_check():
 @app.get("/orders/{order_id}")
 def order_details(
     order_id: str,
+    customer_id: str = Depends(get_authenticated_customer_id),
     db: Session = Depends(get_db),
 ):
-    order = get_order(db, order_id)
+    # Only return an order owned by the authenticated customer.
+    order = get_order(
+        db,
+        order_id,
+        customer_id=customer_id,
+    )
 
     if order is None:
         raise HTTPException(
@@ -109,8 +215,16 @@ def order_details(
 @app.get("/customers/{customer_id}/orders")
 def customer_orders(
     customer_id: str,
+    authenticated_customer_id: str = Depends(
+        get_authenticated_customer_id
+    ),
     db: Session = Depends(get_db),
 ):
+    require_customer_access(
+        customer_id,
+        authenticated_customer_id,
+    )
+
     result = get_customer_orders(db, customer_id)
 
     if result is None:
@@ -123,7 +237,7 @@ def customer_orders(
 
 
 # --------------------------------------------------
-# FAQ endpoint
+# FAQ endpoint (public)
 # --------------------------------------------------
 
 @app.get("/faqs")
@@ -148,8 +262,16 @@ def faq_search(
 def customer_history(
     customer_id: str,
     limit: int = Query(default=20, ge=1, le=100),
+    authenticated_customer_id: str = Depends(
+        get_authenticated_customer_id
+    ),
     db: Session = Depends(get_db),
 ):
+    require_customer_access(
+        customer_id,
+        authenticated_customer_id,
+    )
+
     customer_exists = db.query(Customer).filter(
         Customer.customer_id == customer_id
     ).first()
@@ -163,7 +285,9 @@ def customer_history(
     return {
         "customer_id": customer_id,
         "history": get_conversation_history(
-            db, customer_id, limit
+            db,
+            customer_id,
+            limit,
         ),
     }
 
@@ -175,33 +299,42 @@ def customer_history(
 @app.post("/chat")
 async def chat(
     query: CustomerQuery,
+    authenticated_customer_id: str = Depends(
+        get_authenticated_customer_id
+    ),
     db: Session = Depends(get_db),
 ):
+    require_customer_access(
+        query.customer_id,
+        authenticated_customer_id,
+    )
+
     if client is None:
         raise HTTPException(
-            status_code=500,
+            status_code=503,
             detail="Gemini API key is not configured.",
         )
 
-    # Fetch only orders belonging to this customer ID.
     customer_data = get_customer_orders(
-        db, query.customer_id
+        db,
+        authenticated_customer_id,
     )
 
-    # Retrieve relevant FAQ records.
+    if customer_data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Customer not found.",
+        )
+
     faq_data = search_faqs(db, query.message)
 
     context = {
-        "customer_orders": (
-            customer_data["orders"]
-            if customer_data
-            else []
-        ),
+        "customer_orders": customer_data["orders"],
         "relevant_faqs": faq_data,
     }
 
     prompt = f"""
-Customer ID: {query.customer_id}
+Customer ID: {authenticated_customer_id}
 
 Customer message:
 {query.message}
@@ -245,22 +378,21 @@ Instructions:
                 detail="Gemini returned an empty response.",
             )
 
-        # Persist the question and answer.
         save_conversation(
             db=db,
-            customer_id=query.customer_id,
+            customer_id=authenticated_customer_id,
             question=query.message,
             answer=answer,
         )
 
         return {
-            "customer_id": query.customer_id,
+            "customer_id": authenticated_customer_id,
             "question": query.message,
             "answer": answer,
             "provider": "Google Gemini",
             "model": MODEL_NAME,
             "database_context": {
-                "customer_found": customer_data is not None,
+                "customer_found": True,
                 "orders_found": len(context["customer_orders"]),
                 "faqs_found": len(faq_data),
             },
@@ -272,32 +404,40 @@ Instructions:
 
     except Exception as exc:
         print("Gemini error type:", type(exc).__name__)
-        for attr in ("code", "status", "message"):
-            value = getattr(exc, attr, None)
-            if value is not None:
-                print(f"Gemini {attr}:", value)
 
         raise HTTPException(
             status_code=502,
             detail=(
-                f"Customer support request failed: "
-                f"{type(exc).__name__}. Check the server terminal."
+                "Customer support request failed. "
+                "Check the server terminal for details."
             ),
         ) from exc
+
 
 # --------------------------------------------------
 # Deterministic mock-backend AI agent
 # --------------------------------------------------
 
 @app.post("/agent/chat")
-def agent_chat(query: AgentChatQuery):
+def agent_chat(
+    query: AgentChatQuery,
+    authenticated_customer_id: str = Depends(
+        get_authenticated_customer_id
+    ),
+):
+    require_customer_access(
+        query.customer_id,
+        authenticated_customer_id,
+    )
+
     result = handle_message(
         session_id=query.session_id,
-        customer_id=query.customer_id,
+        customer_id=authenticated_customer_id,
         message=query.message,
     )
+
     return {
         "session_id": query.session_id,
-        "customer_id": query.customer_id,
+        "customer_id": authenticated_customer_id,
         **result,
     }

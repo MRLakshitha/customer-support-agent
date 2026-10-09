@@ -1,4 +1,3 @@
-
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -35,9 +34,18 @@ def get_customer_orders(db: Session, customer_id: str):
     }
 
 
-def get_order(db: Session, order_id: str):
+def get_order(
+    db: Session,
+    order_id: str,
+    customer_id: str | None = None,
+):
+    conditions = [Order.order_id == order_id]
+
+    if customer_id is not None:
+        conditions.append(Order.customer_id == customer_id)
+
     order = db.scalar(
-        select(Order).where(Order.order_id == order_id)
+        select(Order).where(*conditions)
     )
 
     if order is None:
