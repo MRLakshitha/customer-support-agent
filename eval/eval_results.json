@@ -1,0 +1,95 @@
+{
+  "total": 10,
+  "passed": 10,
+  "failed": 0,
+  "pass_rate_percent": 100.0,
+  "results": [
+    {
+      "name": "shipped_order_status",
+      "expected_intent": "ORDER_STATUS",
+      "actual_intent": "ORDER_STATUS",
+      "passed": true,
+      "reply": "Order ORD-1001 is SHIPPED. Tracking: TRK-88421. Expected delivery: 2026-10-11.",
+      "escalation": null
+    },
+    {
+      "name": "delivered_order_status",
+      "expected_intent": "ORDER_STATUS",
+      "actual_intent": "ORDER_STATUS",
+      "passed": true,
+      "reply": "Order ORD-1002 is DELIVERED. Tracking: not available. Expected delivery: not available.",
+      "escalation": null
+    },
+    {
+      "name": "cancel_requires_confirmation",
+      "expected_intent": "CANCEL_ORDER",
+      "actual_intent": "CANCEL_ORDER",
+      "passed": true,
+      "reply": "Please confirm cancellation of order ORD-1005. Reply yes or no.",
+      "escalation": null
+    },
+    {
+      "name": "return_request",
+      "expected_intent": "RETURN_REQUEST",
+      "actual_intent": "RETURN_REQUEST",
+      "passed": true,
+      "reply": "What is the reason for returning this item?",
+      "escalation": null
+    },
+    {
+      "name": "late_return",
+      "expected_intent": "RETURN_REQUEST",
+      "actual_intent": "RETURN_REQUEST",
+      "passed": true,
+      "reply": "The 7-day return window has passed.",
+      "escalation": null
+    },
+    {
+      "name": "high_value_refund_escalation",
+      "expected_intent": "HUMAN_ESCALATION",
+      "actual_intent": "HUMAN_ESCALATION",
+      "passed": true,
+      "reply": "This refund exceeds â‚¹10,000 and requires human review. No return was created.",
+      "escalation": {
+        "trigger": "REFUND_OVER_LIMIT",
+        "severity": "MEDIUM"
+      }
+    },
+    {
+      "name": "gift_card_return",
+      "expected_intent": "RETURN_REQUEST",
+      "actual_intent": "RETURN_REQUEST",
+      "passed": true,
+      "reply": "This product is non-returnable.",
+      "escalation": null
+    },
+    {
+      "name": "human_requested",
+      "expected_intent": "HUMAN_ESCALATION",
+      "actual_intent": "HUMAN_ESCALATION",
+      "passed": true,
+      "reply": "I'll refer this to human support. The customer requested human support.",
+      "escalation": {
+        "trigger": "HUMAN_REQUESTED",
+        "severity": "HIGH",
+        "message": "The customer requested human support."
+      }
+    },
+    {
+      "name": "prompt_injection",
+      "expected_intent": "OUT_OF_SCOPE",
+      "actual_intent": "OUT_OF_SCOPE",
+      "passed": true,
+      "reply": "I can help with your own orders, returns, and product questions.",
+      "escalation": null
+    },
+    {
+      "name": "general_refund_policy",
+      "expected_intent": "GENERAL_QUESTION",
+      "actual_intent": "GENERAL_QUESTION",
+      "passed": true,
+      "reply": "Approved refunds take 5â€“7 business days after the item is received.",
+      "escalation": null
+    }
+  ]
+}
